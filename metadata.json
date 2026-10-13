@@ -1,0 +1,6 @@
+{
+  "name": "Affiliate Predictor AI",
+  "description": "Alat prediksi potensi produk TikTok Shop Affiliate berbasis AI. Analisis gambar analitik secara privacy-first dengan estimasi konversi probabilitas dan ekspor laporan PDF.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

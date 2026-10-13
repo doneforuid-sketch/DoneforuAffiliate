@@ -50,7 +50,21 @@ app.post('/api/analyze', async (req, res) => {
       },
     });
 
-    const cleanBase64 = imageBase64.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
+    // Extract clean Base64 data and resolve proper MIME type
+    let cleanBase64 = String(imageBase64);
+    let resolvedMimeType = mimeType || 'image/png';
+
+    const dataUriMatch = cleanBase64.match(/^data:([a-zA-Z0-9+\/.-]+);base64,/);
+    if (dataUriMatch) {
+      resolvedMimeType = dataUriMatch[1];
+      cleanBase64 = cleanBase64.substring(dataUriMatch[0].length);
+    } else {
+      const base64MarkerIndex = cleanBase64.indexOf(';base64,');
+      if (base64MarkerIndex !== -1) {
+        cleanBase64 = cleanBase64.substring(base64MarkerIndex + 8);
+      }
+    }
+    cleanBase64 = cleanBase64.trim().replace(/\s/g, '');
 
     const promptText = `
 Anda adalah AI OCR & Analis Pakar Metrik Affiliate TikTok Shop.
@@ -72,87 +86,120 @@ Ekstrak informasi berikut secara akurat:
 8. notes: Catatan singkat jika ada angka yang buram atau keterangan tambahan.
 `;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType,
-              data: cleanBase64,
-            },
-          },
-          {
-            text: promptText,
-          },
-        ],
-      },
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            productName: {
-              type: Type.STRING,
-              description: 'Nama produk yang tertera pada tangkapan layar',
-            },
-            totalOrders: {
-              type: Type.NUMBER,
-              description: 'Total pesanan dalam bentuk integer murni (misal 19500)',
-            },
-            totalCreators: {
-              type: Type.NUMBER,
-              description: 'Jumlah kreator dalam bentuk integer murni (misal 21000)',
-            },
-            ctrPercent: {
-              type: Type.NUMBER,
-              description: 'Nilai persentase CTR dalam format desimal float (misal 2.6)',
-            },
-            cartAdds: {
-              type: Type.NUMBER,
-              description: 'Jumlah pembeli yang menambahkan ke keranjang dalam integer murni (misal 63100)',
-            },
-            timePeriod: {
-              type: Type.STRING,
-              description: 'Rentang waktu analisis data',
-            },
-            platform: {
-              type: Type.STRING,
-              description: 'Platform affiliate yang terdeteksi',
-            },
-            notes: {
-              type: Type.STRING,
-              description: 'Catatan tambahan analisis',
-            },
-          },
-          required: ['productName', 'totalOrders', 'totalCreators', 'ctrPercent', 'cartAdds'],
-        },
-      },
-    });
+    const CANDIDATE_MODELS = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
+    let lastError: any = null;
+    let parsedData: any = null;
 
-    const text = response.text;
-    if (!text) {
+    for (const modelName of CANDIDATE_MODELS) {
+      try {
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: {
+            parts: [
+              {
+                inlineData: {
+                  mimeType: resolvedMimeType,
+                  data: cleanBase64,
+                },
+              },
+              {
+                text: promptText,
+              },
+            ],
+          },
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                productName: {
+                  type: Type.STRING,
+                  description: 'Nama produk yang tertera pada tangkapan layar',
+                },
+                totalOrders: {
+                  type: Type.NUMBER,
+                  description: 'Total pesanan dalam bentuk integer murni (misal 19500)',
+                },
+                totalCreators: {
+                  type: Type.NUMBER,
+                  description: 'Jumlah kreator dalam bentuk integer murni (misal 21000)',
+                },
+                ctrPercent: {
+                  type: Type.NUMBER,
+                  description: 'Nilai persentase CTR dalam format desimal float (misal 2.6)',
+                },
+                cartAdds: {
+                  type: Type.NUMBER,
+                  description: 'Jumlah pembeli yang menambahkan ke keranjang dalam integer murni (misal 63100)',
+                },
+                timePeriod: {
+                  type: Type.STRING,
+                  description: 'Rentang waktu analisis data',
+                },
+                platform: {
+                  type: Type.STRING,
+                  description: 'Platform affiliate yang terdeteksi',
+                },
+                notes: {
+                  type: Type.STRING,
+                  description: 'Catatan tambahan analisis',
+                },
+              },
+              required: ['productName', 'totalOrders', 'totalCreators', 'ctrPercent', 'cartAdds'],
+            },
+          },
+        });
+
+        const text = response.text;
+        if (text) {
+          let cleanText = text.trim();
+          if (cleanText.startsWith('```json')) {
+            cleanText = cleanText.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+          } else if (cleanText.startsWith('```')) {
+            cleanText = cleanText.replace(/^```\s*/, '').replace(/\s*```$/, '');
+          }
+          parsedData = JSON.parse(cleanText);
+          if (parsedData) {
+            break; // Successfully extracted
+          }
+        }
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`Model ${modelName} analysis attempt failed:`, err?.message || err);
+        // Brief pause before trying next model
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+    }
+
+    if (!parsedData) {
+      console.error('All model candidates failed. Last error:', lastError);
+      let errorMsg = 'Terjadi kendala saat membaca screenshot. Pastikan gambar jelas dan coba kembali.';
+      const errMsgStr = String(lastError?.message || '');
+      if (
+        errMsgStr.includes('RESOURCE_EXHAUSTED') ||
+        errMsgStr.includes('UNAVAILABLE') ||
+        errMsgStr.includes('high demand') ||
+        lastError?.status === 503 ||
+        lastError?.status === 429
+      ) {
+        errorMsg = 'Layanan analitik AI sedang mengalami lonjakan antrean. Silakan coba klik Analisis kembali dalam beberapa saat.';
+      }
       return res.status(500).json({
-        error: 'EMPTY_RESPONSE',
-        message: 'Sistem analitik tidak dapat membaca teks dari gambar yang diberikan.',
+        error: 'ANALYSIS_FAILED',
+        message: errorMsg,
       });
     }
 
-    const parsedData = JSON.parse(text);
     return res.json({
       success: true,
       data: parsedData,
     });
   } catch (err: unknown) {
     const error = err as Error;
-    console.error('Error analyzing image:', error);
-    let errorMsg = 'Terjadi kendala saat membaca screenshot. Pastikan gambar jelas dan coba kembali.';
-    if (error.message?.includes('RESOURCE_EXHAUSTED')) {
-      errorMsg = 'Layanan analitik sedang mengalami lonjakan traffic. Silakan coba kembali dalam beberapa saat.';
-    }
+    console.error('Unexpected error in /api/analyze:', error);
     return res.status(500).json({
-      error: 'ANALYSIS_FAILED',
-      message: errorMsg,
+      error: 'SERVER_ERROR',
+      message: 'Terjadi kesalahan sistem saat menganalisis screenshot. Silakan coba kembali.',
     });
   }
 });

@@ -54,51 +54,64 @@ export async function analyzeProductScreenshot(
 
   const effectiveApiKey = customApiKey?.trim() || getStoredApiKey();
 
-  // 1. Primary: Server-side AI processing (Default for visitors - zero user configuration needed)
-  try {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (effectiveApiKey) {
-      headers['x-gemini-key'] = effectiveApiKey;
-    }
+  // 1. Primary: Server-side AI processing (Default - zero user configuration needed)
+  let lastErrorMessage = 'Terjadi kendala saat membaca screenshot. Pastikan gambar jelas dan coba kembali.';
 
-    const res = await fetch('/api/analyze', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        imageBase64: base64Data,
-        mimeType,
-      }),
-    });
+  // Attempt up to 2 calls (with 1 automatic retry on transient failure)
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (effectiveApiKey) {
+        headers['x-gemini-key'] = effectiveApiKey;
+      }
 
-    if (res.ok) {
-      const json = await res.json();
-      if (json.success && json.data) {
-        return sanitizeExtractedData(json.data);
+      const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          imageBase64: base64Data,
+          mimeType,
+        }),
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data) {
+          return sanitizeExtractedData(json.data);
+        }
+      } else {
+        const errJson = await res.json().catch(() => null);
+        if (errJson?.message) {
+          lastErrorMessage = errJson.message;
+        }
+        // If not a retryable error or last attempt, throw
+        if (attempt === 2 || (!errJson?.message?.includes('lonjakan') && !errJson?.message?.includes('antrean') && res.status !== 500 && res.status !== 503)) {
+          throw new Error(lastErrorMessage);
+        }
+        // Pause briefly before auto-retry
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        continue;
       }
-    } else {
-      const errJson = await res.json().catch(() => null);
-      if (errJson?.message && !errJson?.message.includes('CONFIG_REQUIRED')) {
-        throw new Error(errJson.message);
+    } catch (err: unknown) {
+      const error = err as Error;
+      lastErrorMessage = error.message || lastErrorMessage;
+      if (attempt === 2 || !effectiveApiKey) {
+        if (!effectiveApiKey) {
+          throw new Error(lastErrorMessage);
+        }
       }
-      if (!effectiveApiKey && errJson?.message) {
-        throw new Error(errJson.message);
+      console.warn(`Server endpoint attempt ${attempt} failed:`, error);
+      if (attempt === 1) {
+        await new Promise((resolve) => setTimeout(resolve, 800));
       }
     }
-  } catch (err: unknown) {
-    const error = err as Error;
-    if (!effectiveApiKey) {
-      throw error;
-    }
-    console.warn('Server endpoint unreachable, trying client fallback...', error);
   }
 
   // 2. Direct fallback (Only if deployed as purely static site without backend and owner set a key)
   if (!effectiveApiKey) {
-    throw new Error(
-      'Sistem analitik AI belum terhubung. Silakan coba kembali sesaat lagi.'
-    );
+    throw new Error(lastErrorMessage);
   }
 
   const cleanBase64 = base64Data.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
@@ -126,7 +139,7 @@ Kembalikan jawaban HANYA dalam JSON valid:
 `;
 
   try {
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${effectiveApiKey}`;
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${effectiveApiKey}`;
     const directRes = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -162,7 +175,14 @@ Kembalikan jawaban HANYA dalam JSON valid:
       throw new Error('Teks analitik tidak terdeteksi dari screenshot. Harap unggah gambar yang lebih jelas.');
     }
 
-    const parsed = JSON.parse(candidateText);
+    let cleanText = candidateText.trim();
+    if (cleanText.startsWith('```json')) {
+      cleanText = cleanText.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+    } else if (cleanText.startsWith('```')) {
+      cleanText = cleanText.replace(/^```\s*/, '').replace(/\s*```$/, '');
+    }
+
+    const parsed = JSON.parse(cleanText);
     return sanitizeExtractedData(parsed);
   } catch (err: unknown) {
     const error = err as Error;

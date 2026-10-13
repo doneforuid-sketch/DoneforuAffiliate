@@ -1,0 +1,203 @@
+import { GoogleGenAI, Type } from '@google/genai';
+
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: '30mb',
+    },
+  },
+};
+
+export default async function handler(req: any, res: any) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'METHOD_NOT_ALLOWED', message: 'Hanya metode POST yang didukung' });
+  }
+
+  try {
+    let body = req.body;
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body);
+      } catch {
+        body = {};
+      }
+    }
+
+    const { imageBase64, mimeType = 'image/png' } = body || {};
+    const clientKey = (req.headers && req.headers['x-gemini-key']) as string | undefined;
+    const apiKey = (clientKey && clientKey.trim()) ? clientKey.trim() : process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+      return res.status(400).json({
+        error: 'CONFIG_REQUIRED',
+        message: 'Koneksi AI Engine belum diaktifkan. Silakan tambahkan GEMINI_API_KEY di Environment Variables Vercel.',
+      });
+    }
+
+    if (!imageBase64) {
+      return res.status(400).json({
+        error: 'IMAGE_REQUIRED',
+        message: 'File gambar tangkapan layar wajib diunggah.',
+      });
+    }
+
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+
+    let cleanBase64 = String(imageBase64);
+    let resolvedMimeType = mimeType || 'image/png';
+
+    const dataUriMatch = cleanBase64.match(/^data:([a-zA-Z0-9+\/.-]+);base64,/);
+    if (dataUriMatch) {
+      resolvedMimeType = dataUriMatch[1];
+      cleanBase64 = cleanBase64.substring(dataUriMatch[0].length);
+    } else {
+      const base64MarkerIndex = cleanBase64.indexOf(';base64,');
+      if (base64MarkerIndex !== -1) {
+        cleanBase64 = cleanBase64.substring(base64MarkerIndex + 8);
+      }
+    }
+    cleanBase64 = cleanBase64.trim().replace(/\s/g, '');
+
+    const promptText = `
+Anda adalah AI OCR & Analis Pakar Metrik Affiliate TikTok Shop.
+Tugas Anda adalah membaca tangkapan layar (screenshot) panel analitik produk affiliate TikTok Shop (seperti Tren Produk TikTok Shop, Pusat Kreator, atau Info Promosi Keranjang Kuning).
+
+PENTING TENTANG NOTASI ANGKA DI INDONESIA / ASIA TENGGARA:
+- Karakter koma (,) sering digunakan sebagai penanda desimal (contoh: "19,5K" berarti 19500; "2,6%" berarti 2.6; "21,0K" berarti 21000; "63,1K" berarti 63100).
+- Huruf K = x1.000 (ribu), M = x1.000.000 (juta).
+- Abaikan angka tren bertanda panah (misal ▲ 4,5K atau ▲ 11,7K), ambil angka metrik utamanya!
+
+Ekstrak informasi berikut secara akurat:
+1. productName: Nama produk yang tampak di bagian atas / info produk (contoh: "Wired Earphone").
+2. totalOrders: Total pesanan (dalam angka bulat, misal 19,5K -> 19500).
+3. totalCreators: Jumlah kreator yang mempromosikan produk ini (angka bulat, misal 21,0K -> 21000).
+4. ctrPercent: Click-Through Rate (CTR) dalam persentase angka murni tanpa simbol % (contoh: jika 2,6%, isi 2.6).
+5. cartAdds: Jumlah pembeli yang menambahkan produk ke keranjang belanja (angka bulat, misal 63,1K -> 63100).
+6. timePeriod: Rentang waktu analitik jika ada (contoh: "7 hari terakhir (3 Okt - 9 Okt 2026)").
+7. platform: Deteksi platform ("TikTok Shop").
+8. notes: Catatan singkat jika ada angka yang buram atau keterangan tambahan.
+`;
+
+    const CANDIDATE_MODELS = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
+    let lastError: any = null;
+    let parsedData: any = null;
+
+    for (const modelName of CANDIDATE_MODELS) {
+      try {
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: {
+            parts: [
+              {
+                inlineData: {
+                  mimeType: resolvedMimeType,
+                  data: cleanBase64,
+                },
+              },
+              {
+                text: promptText,
+              },
+            ],
+          },
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                productName: {
+                  type: Type.STRING,
+                  description: 'Nama produk yang tertera pada tangkapan layar',
+                },
+                totalOrders: {
+                  type: Type.NUMBER,
+                  description: 'Total pesanan dalam bentuk integer murni (misal 19500)',
+                },
+                totalCreators: {
+                  type: Type.NUMBER,
+                  description: 'Jumlah kreator dalam bentuk integer murni (misal 21000)',
+                },
+                ctrPercent: {
+                  type: Type.NUMBER,
+                  description: 'Nilai persentase CTR dalam format desimal float (misal 2.6)',
+                },
+                cartAdds: {
+                  type: Type.NUMBER,
+                  description: 'Jumlah pembeli yang menambahkan ke keranjang dalam integer murni (misal 63100)',
+                },
+                timePeriod: {
+                  type: Type.STRING,
+                  description: 'Rentang waktu analisis data',
+                },
+                platform: {
+                  type: Type.STRING,
+                  description: 'Platform affiliate yang terdeteksi',
+                },
+                notes: {
+                  type: Type.STRING,
+                  description: 'Catatan tambahan analisis',
+                },
+              },
+              required: ['productName', 'totalOrders', 'totalCreators', 'ctrPercent', 'cartAdds'],
+            },
+          },
+        });
+
+        const text = response.text;
+        if (text) {
+          let cleanText = text.trim();
+          if (cleanText.startsWith('```json')) {
+            cleanText = cleanText.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+          } else if (cleanText.startsWith('```')) {
+            cleanText = cleanText.replace(/^```\s*/, '').replace(/\s*```$/, '');
+          }
+          parsedData = JSON.parse(cleanText);
+          if (parsedData) {
+            break;
+          }
+        }
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`Model ${modelName} analysis attempt failed:`, err?.message || err);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+    }
+
+    if (!parsedData) {
+      console.error('All model candidates failed. Last error:', lastError);
+      let errorMsg = 'Terjadi kendala saat membaca screenshot. Pastikan gambar jelas dan coba kembali.';
+      const errMsgStr = String(lastError?.message || '');
+      if (
+        errMsgStr.includes('RESOURCE_EXHAUSTED') ||
+        errMsgStr.includes('UNAVAILABLE') ||
+        errMsgStr.includes('high demand') ||
+        lastError?.status === 503 ||
+        lastError?.status === 429
+      ) {
+        errorMsg = 'Layanan analitik AI sedang mengalami lonjakan antrean. Silakan coba klik Analisis kembali dalam beberapa saat.';
+      }
+      return res.status(500).json({
+        error: 'ANALYSIS_FAILED',
+        message: errorMsg,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: parsedData,
+    });
+  } catch (err: unknown) {
+    const error = err as Error;
+    console.error('Unexpected error in Vercel api/analyze:', error);
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: 'Terjadi kesalahan sistem saat menganalisis screenshot. Silakan coba kembali.',
+    });
+  }
+}

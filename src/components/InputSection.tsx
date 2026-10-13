@@ -11,6 +11,7 @@ import {
   Percent,
   CheckCircle,
   Zap,
+  BookOpen,
 } from 'lucide-react';
 import { PredictionParameters } from '../types';
 
@@ -21,6 +22,7 @@ interface InputSectionProps {
   error: string | null;
   onClearError: () => void;
   onUseSampleData: () => void;
+  onOpenTutorial?: () => void;
 }
 
 export const InputSection: React.FC<InputSectionProps> = ({
@@ -30,6 +32,7 @@ export const InputSection: React.FC<InputSectionProps> = ({
   error,
   onClearError,
   onUseSampleData,
+  onOpenTutorial,
 }) => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -136,6 +139,29 @@ export const InputSection: React.FC<InputSectionProps> = ({
         <p className="mt-3 text-sm sm:text-base text-slate-600 max-w-2xl mx-auto leading-relaxed">
           Unggah screenshot analitik produk affiliate TikTok Shop. Algoritma kami akan memindai data metrik secara instan dan memproyeksikan jumlah video yang diperlukan untuk mencapai target closing 90%.
         </p>
+
+        {/* Quick Guide & Demo Pills */}
+        <div className="flex flex-wrap items-center justify-center gap-2.5 mt-4">
+          {onOpenTutorial && (
+            <button
+              type="button"
+              onClick={onOpenTutorial}
+              className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-bold bg-white text-slate-800 border border-slate-300 hover:border-slate-400 hover:bg-slate-50 shadow-2xs transition active:scale-95 cursor-pointer"
+            >
+              <BookOpen className="w-3.5 h-3.5 text-[#FE2C55]" />
+              <span>Panduan Interaktif Pengguna Baru (5 Langkah)</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={onUseSampleData}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 shadow-2xs transition active:scale-95 cursor-pointer"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-[#FFB800]" />
+            <span>Coba Demo Contoh (Wired Earphone)</span>
+          </button>
+        </div>
       </div>
 
       {/* Main Upload Box */}

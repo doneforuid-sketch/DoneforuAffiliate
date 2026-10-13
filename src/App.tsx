@@ -15,6 +15,7 @@ import {
 import { calculateAffiliatePrediction } from './utils/calculator';
 import { analyzeProductScreenshot } from './utils/geminiClient';
 import { ShieldCheck, Sparkles, CheckCircle2 } from 'lucide-react';
+import { TutorialModal } from './components/TutorialModal';
 
 // Sample dataset based on the real uploaded TikTok Shop earphone analytics screenshot
 const SAMPLE_EARPHONE_DATA: ExtractedProductData = {
@@ -40,6 +41,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [isTutorialOpen, setIsTutorialOpen] = useState(false);
 
   const handleAnalyze = async (imageInput: File | string, params: PredictionParameters) => {
     setIsLoading(true);
@@ -95,7 +97,10 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-800 flex flex-col selection:bg-[#FE2C55] selection:text-white">
       {/* Navigation Header */}
-      <Header onLoadSampleData={handleUseSampleData} />
+      <Header
+        onLoadSampleData={handleUseSampleData}
+        onOpenTutorial={() => setIsTutorialOpen(true)}
+      />
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-10">
@@ -107,6 +112,7 @@ export default function App() {
             error={error}
             onClearError={() => setError(null)}
             onUseSampleData={handleUseSampleData}
+            onOpenTutorial={() => setIsTutorialOpen(true)}
           />
         ) : (
           <Dashboard
@@ -116,6 +122,13 @@ export default function App() {
           />
         )}
       </main>
+
+      {/* Interactive Step-by-Step Tutorial Modal for New Users */}
+      <TutorialModal
+        isOpen={isTutorialOpen}
+        onClose={() => setIsTutorialOpen(false)}
+        onTryDemo={handleUseSampleData}
+      />
 
       {/* Privacy Guarantee & Professional Footer */}
       <footer className="border-t border-slate-200 bg-white py-8 px-4 sm:px-6 lg:px-8 text-xs text-slate-500 mt-auto">
